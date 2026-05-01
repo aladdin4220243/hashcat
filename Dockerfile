@@ -1,10 +1,10 @@
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
 
-# تثبيت الحزم المطلوبة
-RUN apt-get update && apt-get install -y \
+# تثبيت الحزم
+RUN apt-get update && \
+    apt-get install -y \
     hashcat \
     hcxtools \
     apache2 \
@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     php-cli \
     wget \
     curl \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # إعداد PHP
@@ -21,10 +22,10 @@ RUN echo "memory_limit = 512M" > /etc/php/8.1/apache2/conf.d/99-custom.ini && \
     echo "upload_max_filesize = 100M" >> /etc/php/8.1/apache2/conf.d/99-custom.ini && \
     echo "post_max_size = 100M" >> /etc/php/8.1/apache2/conf.d/99-custom.ini
 
-# إنشاء مجلد لكلمات المرور
+# إنشاء المجلدات
 RUN mkdir -p /var/www/html/wordlists
 
-# نسخ ملفات المشروع (تأكد من وجودها في المستودع)
+# نسخ الملفات
 COPY index.html /var/www/html/
 COPY upload.php /var/www/html/
 COPY hashcat_wrapper.sh /usr/local/bin/
@@ -35,15 +36,11 @@ RUN chmod +x /usr/local/bin/hashcat_wrapper.sh && \
     chown -R www-data:www-data /var/www/html && \
     chmod -R 755 /var/www/html
 
-# تعطيل مواقع Apache الافتراضية وتمكين موقعنا
-RUN a2dissite 000-default.conf && \
-    a2ensite 000-default.conf
+# إعداد Apache - الطريقة المبسطة
+RUN echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
-# إعداد Apache للاستماع على جميع الواجهات
-RUN echo "Listen 0.0.0.0:80" >> /etc/apache2/ports.conf
-
-# فتح المنفذ 80
+# تعطيل Apachectl الافتراضي واستخدام الأمر المباشر
 EXPOSE 80
 
-# بدء Apache في المقدمة (foreground)
-CMD ["/usr/sbin/apache2ctl", "-D", "FOREGROUND"]
+# بدء Apache في المقدمة (Foreground)
+CMD ["apache2ctl", "-D", "FOREGROUND"]
