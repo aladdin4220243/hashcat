@@ -2,26 +2,35 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# تثبيت الحزم
+# تثبيت Nginx, PHP-FPM, Hashcat
 RUN apt-get update && \
     apt-get install -y \
+    nginx \
+    php-fpm \
+    php-cli \
     hashcat \
     hcxtools \
-    php \
-    php-cli \
     wget \
     curl \
+    supervisor \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # إعداد PHP
-RUN echo "memory_limit = 512M" > /etc/php/8.1/cli/conf.d/99-custom.ini && \
-    echo "max_execution_time = 300" >> /etc/php/8.1/cli/conf.d/99-custom.ini && \
-    echo "upload_max_filesize = 100M" >> /etc/php/8.1/cli/conf.d/99-custom.ini && \
-    echo "post_max_size = 100M" >> /etc/php/8.1/cli/conf.d/99-custom.ini
+RUN echo "memory_limit = 512M" > /etc/php/8.1/fpm/conf.d/99-custom.ini && \
+    echo "max_execution_time = 300" >> /etc/php/8.1/fpm/conf.d/99-custom.ini && \
+    echo "upload_max_filesize = 100M" >> /etc/php/8.1/fpm/conf.d/99-custom.ini && \
+    echo "post_max_size = 100M" >> /etc/php/8.1/fpm/conf.d/99-custom.ini && \
+    echo "max_input_time = 300" >> /etc/php/8.1/fpm/conf.d/99-custom.ini
+
+# إعداد Nginx
+RUN rm /etc/nginx/sites-enabled/default
+COPY nginx.conf /etc/nginx/sites-available/default
+RUN ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 
 # إنشاء المجلدات
 RUN mkdir -p /app/wordlists
+RUN mkdir -p /var/www/html
 
 # نسخ الملفات
 COPY index.html /app/
@@ -31,13 +40,14 @@ COPY wordlists/ /app/wordlists/
 
 # إعطاء الصلاحيات
 RUN chmod +x /usr/local/bin/hashcat_wrapper.sh && \
-    chmod -R 755 /app
+    chmod -R 755 /app && \
+    chown -R www-data:www-data /app /var/www/html
 
-# تعيين مجلد العمل
-WORKDIR /app
+# إعداد Supervisor
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # فتح المنفذ
-EXPOSE 8000
+EXPOSE 80
 
-# تشغيل خادم PHP المدمج
-CMD ["php", "-S", "0.0.0.0:8000"]
+# تشغيل Supervisor (يدير Nginx و PHP-FPM)
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]
