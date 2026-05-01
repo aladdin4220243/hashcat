@@ -1,87 +1,130 @@
 <?php
-// upload.php - نسخة متوافقة مع Railway
+// upload.php - المعالج الرئيسي
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+ini_set('max_execution_time', 300); // 5 دقائق
+ini_set('memory_limit', '512M');
+
 $startTime = microtime(true);
 
+function cleanOutput($output) {
+    return htmlspecialchars($output, ENT_QUOTES, 'UTF-8');
+}
+
+function formatResult($crackedHashes, $speed, $duration, $rawOutput) {
+    $html = '';
+    
+    if (!empty($crackedHashes)) {
+        $html .= '<div style="background: #d4edda; padding: 15px; border-radius: 8px; margin-bottom: 20px;">';
+        $html .= '<strong style="color: #155724;">✅ تم العثور على ' . count($crackedHashes) . ' هاش مكسور!</strong>';
+        $html .= '</div>';
+        
+        $html .= '<table style="width: 100%; border-collapse: collapse;">';
+        $html .= '<thead><tr style="background: #667eea; color: white;"><th style="padding: 10px; text-align: right;">الهاش</th><th style="padding: 10px; text-align: right;">كلمة المرور</th></tr></thead>';
+        $html .= '<tbody>';
+        foreach ($crackedHashes as $line) {
+            if (strpos($line, ':') !== false) {
+                list($hash, $password) = explode(':', $line, 2);
+                $html .= "<tr style='border-bottom: 1px solid #e0e0e0;'>";
+                $html .= "<td style='padding: 10px;'><code>" . cleanOutput($hash) . "</code></td>";
+                $html .= "<td style='padding: 10px;'><strong>" . cleanOutput($password) . "</strong></td>";
+                $html .= "</tr>";
+            }
+        }
+        $html .= '</tbody></table>';
+    } else {
+        $html .= '<div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 20px;">';
+        $html .= '<strong style="color: #856404;">⚠️ لم يتم العثور على هاشات مكسورة</strong>';
+        $html .= '<p style="margin-top: 10px; font-size: 14px;">جرب ملف كلمات أكبر أو نوع هاش مختلف.</p>';
+        $html .= '</div>';
+    }
+    
+    $html .= '<div style="background: #e7f3ff; padding: 15px; border-radius: 8px; margin-top: 20px;">';
+    $html .= '<strong>📈 الإحصائيات:</strong><br>';
+    $html .= '⚡ سرعة التكسير: ' . cleanOutput($speed) . '<br>';
+    $html .= '⏱️ الوقت المستغرق: ' . round($duration, 2) . ' ثانية<br>';
+    $html .= '</div>';
+    
+    $html .= '<details style="margin-top: 20px;">';
+    $html .= '<summary style="cursor: pointer; color: #667eea; font-weight: bold;">📋 عرض السجل الكامل</summary>';
+    $html .= '<pre style="background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 8px; overflow-x: auto; margin-top: 10px; font-size: 11px;">' . cleanOutput($rawOutput) . '</pre>';
+    $html .= '</details>';
+    
+    return $html;
+}
+
+// التحقق من رفع الملف
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     die("طلب غير صحيح");
 }
 
-// دالة لعرض النتائج بشكل جميل
-function formatOutput($output, $speed, $crackedHashes) {
-    $html = "<h3>✅ نتائج التكسير</h3>";
-    $html .= "<p>⚡ السرعة: <strong>{$speed}</strong> هاش/ثانية</p>";
-    $html .= "<h4>🔓 الهاشات المكسورة:</h4><pre>";
-    if (empty($crackedHashes)) {
-        $html .= "لا توجد هاشات مكسورة (جرب ملف كلمات أكبر أو نوع هاش صحيح)";
-    } else {
-        $html .= implode("\n", $crackedHashes);
-    }
-    $html .= "</pre><hr><details><summary>📋 السجل الكامل</summary><pre>" . htmlspecialchars($output) . "</pre></details>";
-    return $html;
+if (!isset($_FILES['hashfile']) || $_FILES['hashfile']['error'] !== UPLOAD_ERR_OK) {
+    die("❌ خطأ في رفع الملف");
 }
 
-if (!isset($_FILES['capfile']) || $_FILES['capfile']['error'] !== UPLOAD_ERR_OK) {
-    die("خطأ في رفع ملف CAP");
-}
+// إنشاء مجلد مؤقت
+$uploadDir = "/tmp/hashcat_" . uniqid() . "/";
+mkdir($uploadDir, 0777, true);
 
-$uploadDir = "/tmp/hashcat_uploads/";
-if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
-
-$capPath = $uploadDir . uniqid() . "_" . basename($_FILES['capfile']['name']);
-move_uploaded_file($_FILES['capfile']['tmp_name'], $capPath);
+$uploadedFile = $uploadDir . basename($_FILES['hashfile']['name']);
+move_uploaded_file($_FILES['hashfile']['tmp_name'], $uploadedFile);
 
 $hashType = escapeshellarg($_POST['hash_type']);
-$wordlist = $_POST['wordlist'];
+$wordlist = escapeshellarg($_POST['wordlist']);
+$attackMode = escapeshellarg($_POST['attack_mode']);
 
-// التحقق من وجود ملف كلمات المرور
-if (!file_exists($wordlist)) {
-    die("⚠️ ملف كلمات المرور غير موجود: $wordlist");
+// التحقق من وجود ملف الكلمات
+if (!file_exists($_POST['wordlist'])) {
+    die("❌ ملف كلمات المرور غير موجود: " . $_POST['wordlist']);
 }
 
-// استخراج الهاش من ملف CAP (لـ WPA/WPA2)
-$hashFile = $uploadDir . "hash_" . uniqid() . ".hc22000";
+$outputFile = $uploadDir . "cracked.txt";
+$potFile = $uploadDir . "hashcat.pot";
 
-// محاولة استخراج الهاش باستخدام hcxpcapngtool (إذا كان موجوداً)
-$hcxtools = shell_exec("which hcxpcapngtool");
-if (empty($hcxtools)) {
-    // إذا لم يكن hcxtools موجوداً، استخدم طريقة بديلة: hashcat -m 2500 تدعم .cap مباشرة
-    $targetHash = $capPath;
-    $isDirectCap = true;
-} else {
-    $cmd_extract = "hcxpcapngtool -o " . escapeshellarg($hashFile) . " " . escapeshellarg($capPath) . " 2>&1";
-    exec($cmd_extract, $extractOut, $extractRet);
-    if (file_exists($hashFile) && filesize($hashFile) > 0) {
-        $targetHash = $hashFile;
-        $isDirectCap = false;
-    } else {
-        $targetHash = $capPath;
-        $isDirectCap = true;
+// بناء أمر Hashcat
+$targetFile = $uploadedFile;
+$fileExtension = strtolower(pathinfo($uploadedFile, PATHINFO_EXTENSION));
+
+// إذا كان ملف CAP، نحتاج إلى تحويله باستخدام hcxpcapngtool
+if ($fileExtension == 'cap' || $fileExtension == 'pcap') {
+    $hc22000File = $uploadDir . "hash.hc22000";
+    $hcxtool = shell_exec("which hcxpcapngtool");
+    if (!empty($hcxtool)) {
+        exec("hcxpcapngtool -o " . escapeshellarg($hc22000File) . " " . escapeshellarg($uploadedFile) . " 2>&1", $extractOut);
+        if (file_exists($hc22000File) && filesize($hc22000File) > 0) {
+            $targetFile = $hc22000File;
+        }
     }
 }
 
-// تشغيل Hashcat
-$outputFile = $uploadDir . "result_" . uniqid();
-$hashcatCmd = "hashcat -m " . $hashType . " -a 0 " . escapeshellarg($targetHash) . " " . escapeshellarg($wordlist) . " -o " . escapeshellarg($outputFile) . " --potfile-disable 2>&1";
+$hashcatCmd = "hashcat -m " . $hashType . " -a " . $attackMode . " " . escapeshellarg($targetFile) . " " . $wordlist . " -o " . escapeshellarg($outputFile) . " --potfile-path=" . escapeshellarg($potFile) . " --force 2>&1";
 
-exec($hashcatCmd . "; echo 'EXIT_CODE:' . $?", $fullOutput, $retVal);
+exec($hashcatCmd, $fullOutput, $retVal);
 
 // قراءة النتائج
-$cracked = [];
-if (file_exists($outputFile)) {
-    $cracked = file($outputFile, FILE_IGNORE_NEW_LINES);
+$crackedHashes = [];
+if (file_exists($outputFile) && filesize($outputFile) > 0) {
+    $crackedHashes = file($outputFile, FILE_IGNORE_NEW_LINES);
 }
 
-// استخراج السرعة من مخرجات hashcat
-$speedOutput = implode("\n", $fullOutput);
-preg_match('/(\d+\.?\d*)\s+[kKmMgG]?H\/s/', $speedOutput, $matches);
-$speed = isset($matches[1]) ? $matches[1] . " H/s" : "غير متاحة";
+// استخراج السرعة
+$outputStr = implode("\n", $fullOutput);
+preg_match('/(\d+\.?\d*)\s*([kKmMgG]?)\s*H\/s/', $outputStr, $matches);
+$speedValue = isset($matches[1]) ? $matches[1] : '0';
+$speedUnit = isset($matches[2]) ? $matches[2] : '';
+$speed = $speedValue . " " . $speedUnit . "H/s";
 
-$duration = round(microtime(true) - $startTime, 2);
-$speedText = $speed . " (زمن: {$duration} ثانية)";
+$duration = microtime(true) - $startTime;
 
 // تنظيف الملفات المؤقتة
-@unlink($capPath);
-@unlink($hashFile);
-if (!$isDirectCap && file_exists($targetHash)) @unlink($targetHash);
+$cleanup = function($dir) {
+    $files = glob($dir . "*");
+    foreach ($files as $file) {
+        if (is_file($file)) unlink($file);
+    }
+    rmdir($dir);
+};
+$cleanup($uploadDir);
 
-echo formatOutput(implode("\n", $fullOutput), $speedText, $cracked);
+echo formatResult($crackedHashes, $speed, $duration, $outputStr);
+?>
