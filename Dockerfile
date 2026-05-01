@@ -1,9 +1,7 @@
 FROM ubuntu:22.04
 
-# منع الأسئلة التفاعلية أثناء التثبيت
 ENV DEBIAN_FRONTEND=noninteractive
 
-# تثبيت Hashcat والأدوات المطلوبة
 RUN apt-get update && apt-get install -y \
     hashcat \
     hcxtools \
@@ -11,20 +9,19 @@ RUN apt-get update && apt-get install -y \
     php \
     libapache2-mod-php \
     wget \
-    unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# تحميل ملف كلمات صغير للاختبار
-RUN mkdir -p /var/www/html/wordlists && \
-    cd /var/www/html/wordlists && \
-    wget -q https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/Common-Credentials/10-million-password-list-top-100.txt -O small.txt
+# إنشاء مجلد لكلمات المرور
+RUN mkdir -p /var/www/html/wordlists
 
-# نسخ ملفات المشروع
+# نسخ الملفات
 COPY index.html /var/www/html/
 COPY upload.php /var/www/html/
+COPY hashcat_wrapper.sh /usr/local/bin/
+COPY wordlists/ /var/www/html/wordlists/
 
-# صلاحيات التشغيل
-RUN chown -R www-data:www-data /var/www/html && \
+RUN chmod +x /usr/local/bin/hashcat_wrapper.sh && \
+    chown -R www-data:www-data /var/www/html && \
     chmod -R 755 /var/www/html
 
 # إعداد Apache
